@@ -1,0 +1,17 @@
+# AWS credentials — never bake into the image
+.aws/
+.aws/credentials
+.aws/config
+
+# PostgreSQL password file
+.pgpass
+
+# Secrets files used across our repos
+.secrets
+**/config/config.py
+**/config/database.ini
+**/config/credentials*.json
+**/credentials.json
+**/token*.pickle
+**/.env
+**/.envrc
