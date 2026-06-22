@@ -19,48 +19,53 @@ Uses your existing claude.ai subscription for billing. No API key required.
    echo '{}' > ~/.claude.json
    ```
 
-2. Build the image (once, or after Dockerfile changes):
+2. Create the bash history file on your host:
+
+   ```sh
+   touch ~/.claude_dev_bash_history
+   ```
+
+3. Build the image (once, or after Dockerfile changes):
 
    ```sh
    HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose build
    ```
 
-3. Start a session:
+4. Start a session:
 
    ```sh
    HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose run --rm dev
    ```
 
-4. On first run, Claude Code will prompt you to authenticate via browser.
+5. On first run, Claude Code will prompt you to authenticate via browser.
    Follow the URL it prints. Auth is saved to `~/.claude` and `~/.claude.json`
    on your host and reused on subsequent sessions — you won't be asked again
    unless you explicitly log out.
 
-Add a shell alias for convenience, replacing the path with wherever you cloned this
-repo:
+## Shell function
+
+Add this to your `~/.zshrc`, replacing the path with wherever you cloned this repo:
 
 ```sh
-alias cdev='HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose -f ~/git/claude-dev-container/docker-compose.yml run --rm dev'
+function cdev() {
+  HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose -f ~/git/claude-dev-container/docker-compose.yml run --rm dev
+}
 ```
 
 Then just run `cdev` from anywhere.
 
-### tmux users: use `-i` instead of `-t`
+### tmux users
 
-`docker compose run` allocates a PTY (`-t`) by default, which is the right choice
-for most terminals. However, if you run this container inside a **tmux session**,
-the nested PTY prevents tmux from capturing output in its scrollback buffer —
-`Prefix + [` will show `[0/0]` and you cannot scroll back through Claude's output.
-
-The fix is to pass `-T` to `docker compose run`, which disables PTY allocation and
-lets tmux own the terminal:
+Running `cdev` inside an existing tmux pane mixes the container's scrollback
+with your host shell history. Open the container in a fresh tmux window instead:
 
 ```sh
-alias cdev='HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose -f ~/git/claude-dev-container/docker-compose.yml run --rm -T dev'
+function cdev() {
+  tmux new-window -n 'claude' 'HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose -f ~/git/claude-dev-container/docker-compose.yml run --rm dev'
+}
 ```
 
-tmux then captures all output normally and scrollback works as expected. Colors and
-interactivity are preserved because tmux itself provides the PTY.
+The window closes automatically when you exit the container.
 
 ## Notes
 
@@ -73,22 +78,44 @@ interactivity are preserved because tmux itself provides the PTY.
 - **Not mounted**: `~/.aws`, `~/.ssh`, `~/.config`, your home directory, and
   any credential files — none of these are accessible inside the container.
 
-## Known gap: secrets inside repo directories
+## Gotchas
 
-Because the entire `~/git` tree is mounted, any `.gitignore`d secret files that
-live inside a repo directory (e.g. `config/config.py`, `.secrets`, `database.ini`)
-are accessible to Claude Code inside the container.
+### First run: corrupted config warning
 
-The `.dockerignore` in this repo prevents these patterns from being baked into the
-image, but it does not protect against the volume mount.
+On first run you will see:
 
-The proper fix is to move secrets out of the repo tree entirely — for example into
-`~/.config/ioc/<service>/` or a secrets manager — and have repos reference them by
-path or environment variable. Until that migration is done, treat the container as
-having the same secret access as your local shell.
+```
+Claude configuration file at /home/devuser/.claude.json is corrupted: JSON Parse error: Unexpected EOF
+```
+
+This is expected — `echo '{}'` writes a valid but empty config. When prompted,
+select **"Reset with default configuration"**. Claude Code will write a valid
+config and you won't see this again.
+
+### tmux scrollback (Claude Code alternate screen)
+
+Claude Code uses the alternate screen buffer by default, which prevents tmux
+from capturing its output in scrollback. This is a known upstream issue with
+multiple open reports on the Claude Code GitHub.
+
+This container disables the alternate screen via
+`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`, which restores normal tmux scrollback
+behavior. If you ever run Claude Code outside this container and hit the same
+issue, set that env var in your shell.
 
 ## Rebuilding after Dockerfile changes
 
 ```sh
 HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose build --no-cache
 ```
+
+## Known gap: secrets inside repo directories
+
+Because the entire `~/git` tree is mounted, any `.gitignore`d secret files that
+live inside a repo directory (e.g. `config/config.py`, `.secrets`, `database.ini`)
+are accessible to Claude Code inside the container.
+
+The proper fix is to move secrets out of the repo tree entirely — for example into
+`~/.config/<service>/` or a secrets manager — and have repos reference them by
+path or environment variable. Until that migration is done, treat the container as
+having the same secret access as your local shell.
