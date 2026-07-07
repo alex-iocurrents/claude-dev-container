@@ -12,60 +12,44 @@ Uses your existing claude.ai subscription for billing. No API key required.
 
 ## Setup
 
-1. Create the Claude Code config file on your host (must exist before first run
-   or Docker will create it as a directory instead of a file):
+1. Build the image:
 
    ```sh
-   echo '{}' > ~/.claude.json
+   make build
    ```
 
-2. Create the bash history file on your host:
+2. Start a session:
 
    ```sh
-   touch ~/.claude_dev_bash_history
+   make run
    ```
 
-3. Build the image (once, or after Dockerfile changes):
+3. On first run, Claude Code will ask you to authenticate via browser. Follow
+   the URL it prints. Auth is saved to `~/.claude` and `~/.claude.json` on your
+   host and reused on subsequent sessions — you won't be asked again unless you
+   explicitly log out.
 
-   ```sh
-   HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose build
-   ```
+## Shell alias
 
-4. Start a session:
-
-   ```sh
-   HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose run --rm dev
-   ```
-
-5. On first run, Claude Code will prompt you to authenticate via browser.
-   Follow the URL it prints. Auth is saved to `~/.claude` and `~/.claude.json`
-   on your host and reused on subsequent sessions — you won't be asked again
-   unless you explicitly log out.
-
-## Shell function
-
-Add this to your `~/.zshrc`, replacing the path with wherever you cloned this repo:
+The team's shared dotfiles define a `cdev` alias so you don't have to `cd`
+into this repo every time:
 
 ```sh
-function cdev() {
-  HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose -f ~/git/claude-dev-container/docker-compose.yml run --rm dev
-}
+alias cdev='make -C ~/git/claude-dev-container run'
 ```
 
-Then just run `cdev` from anywhere.
+Running `cdev` is equivalent to `make run` — it applies the `restrict-network`
+iptables rules (see [Network isolation](#network-isolation)) before starting
+the container. Don't replace this with a raw `docker compose run` alias; that
+would skip `restrict-network` and start the container without the network
+isolation.
 
-### tmux users
-
-Running `cdev` inside an existing tmux pane mixes the container's scrollback
-with your host shell history. Open the container in a fresh tmux window instead:
+The alias assumes this repo is checked out at `~/git/claude-dev-container`. If
+your clone lives somewhere else, change the `-C` path to match, e.g.:
 
 ```sh
-function cdev() {
-  tmux new-window -n 'claude' 'HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose -f ~/git/claude-dev-container/docker-compose.yml run --rm dev'
-}
+alias cdev='make -C /path/to/your/claude-dev-container run'
 ```
-
-The window closes automatically when you exit the container.
 
 ## Notes
 
@@ -75,38 +59,107 @@ The window closes automatically when you exit the container.
   host so your login survives container restarts.
 - **File ownership**: built with your UID/GID so files Claude creates are owned
   by you on the host. No `sudo chown` needed.
-- **Not mounted**: `~/.aws`, `~/.ssh`, `~/.config`, your home directory, and
-  any credential files — none of these are accessible inside the container.
+- **Not mounted**: `~/.aws`, `~/.ssh`, your home directory — not accessible
+  inside the container. Exception: `~/.config/jira-sync/credentials` is mounted
+  read-only so the jira-sync script can run inside the container.
 
-## Gotchas
+## Available tools
 
-### First run: corrupted config warning
+In addition to the base Node.js environment, the image includes:
 
-On first run you will see:
+| Tool | Purpose |
+|------|---------|
+| `python3` / `pip3` / `uv` | Python scripting; `python3 -m venv` also works |
+| `ansible` | Ansible CLI for infrastructure repo playbooks |
+| `ruff` | Python linter / formatter |
+| `pyright` | Python type checker |
+| `terraform` | Terraform 1.9.8 (compatible with `~> 1.6` and `~> 1.7`) |
+| `jq` | JSON filtering and transformation |
+| `shellcheck` | Shell script linter |
+| `rg` (ripgrep) | Fast file search |
+| `psql` | PostgreSQL client (`postgresql-client`) |
+| `csvkit` (`csvstat`, `csvcut`, `in2csv`, …) | CSV inspection and transformation |
 
+## Intentionally excluded tools
+
+| Tool | Reason |
+|------|--------|
+| `aws` (AWS CLI) | No AWS credentials are mounted into the container |
+| `gh` (GitHub CLI) | No GitHub credentials are mounted; GitHub automation is handled via GitHub Actions |
+
+## Network isolation
+
+The goal is to allow general internet access (web search, curl) while blocking
+access to AWS, VPN-connected VPCs, and RFC 1918 ranges that would be reachable
+through a VPN tunnel on the host.
+
+### What the compose file provides
+
+- A **named Docker network** (`claude-dev-net`) with a fixed subnet
+  (`172.30.0.0/24`) and a fixed bridge name (`br-claude-dev`). The stable
+  names make host-level iptables rules reliable — without them, Docker assigns
+  a random bridge name like `br-a1b2c3d4e5f6` on each `docker compose up`,
+  breaking any rules you've written.
+
+- `cap_drop: ALL` already drops `NET_ADMIN` and `NET_RAW`, so the container
+  **cannot modify its own routing table or inject iptables rules**. It can reach
+  whatever the Docker bridge can reach, but it cannot undo any blocks you apply
+  at the host level.
+
+### What requires host-level action
+
+Blocking specific destination CIDRs must be done in the Docker host's iptables
+`DOCKER-USER` chain, outside the container. `make run` applies the rules
+automatically by calling `make restrict-network` before starting the container.
+
+`restrict-network` uses `docker run --privileged --pid=host --net=host` with
+`nsenter` to reach the network namespace where Docker's iptables chains live.
+This works on both macOS and Linux:
+
+- **macOS**: Docker Desktop runs a Linux VM; `nsenter -t 1` enters that VM's
+  network namespace, which is where the `DOCKER-USER` chain lives.
+- **Linux**: `nsenter -t 1` enters the host's network namespace — same result.
+
+On both platforms, `make run` calls this target automatically on every session,
+so rules are re-applied after a Docker Desktop restart without any manual step.
+
+**nftables caveat (Linux)**: newer distros (Ubuntu 22.04+, Debian 12+) default
+to nftables. If Docker is configured to use the nftables backend rather than
+the iptables compatibility layer, the `DOCKER-USER` chain won't exist and the
+rules will need to be expressed as nftables rules instead. Check with
+`sudo iptables -L DOCKER-USER` — if it errors, you're on the nftables path.
+
+```sh
+make run   # restrict-network runs automatically before the container starts
 ```
-Claude configuration file at /home/devuser/.claude.json is corrupted: JSON Parse error: Unexpected EOF
+
+This blocks the following destinations from `172.30.0.0/24`:
+
+| CIDR | Reason |
+|------|--------|
+| `10.0.0.0/8` | RFC 1918 / AWS VPC / VPN ranges |
+| `172.16.0.0/12` | RFC 1918 |
+| `192.168.0.0/16` | RFC 1918 / common VPN ranges |
+| `169.254.169.254/32` | AWS instance metadata service (IMDS) |
+
+**To also block your VPN CIDR**, add a line to the `restrict-network` target in
+the Makefile:
+
+```makefile
+iptables -I DOCKER-USER -s 172.30.0.0/24 -d <YOUR-VPN-CIDR> -j DROP; \
 ```
 
-This is expected — `echo '{}'` writes a valid but empty config. When prompted,
-select **"Reset with default configuration"**. Claude Code will write a valid
-config and you won't see this again.
+### Verifying the rules are active
 
-### tmux scrollback (Claude Code alternate screen)
-
-Claude Code uses the alternate screen buffer by default, which prevents tmux
-from capturing its output in scrollback. This is a known upstream issue with
-multiple open reports on the Claude Code GitHub.
-
-This container disables the alternate screen via
-`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`, which restores normal tmux scrollback
-behavior. If you ever run Claude Code outside this container and hit the same
-issue, set that env var in your shell.
+```sh
+docker run --privileged --pid=host --net=host --rm alpine \
+  nsenter -t 1 -m -u -i -n -- iptables -L DOCKER-USER -n --line-numbers
+```
 
 ## Rebuilding after Dockerfile changes
 
 ```sh
-HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose build --no-cache
+make build
 ```
 
 ## Known gap: secrets inside repo directories

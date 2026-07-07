@@ -22,8 +22,15 @@ services:
       - ${HOME}/.claude.json:/home/devuser/.claude.json:rw
       # Persists bash history across container sessions
       - ${HOME}/.claude_dev_bash_history:/home/devuser/.bash_history:rw
+      # Jira sync credentials (read-only; create ~/.config/jira-sync/credentials on host first)
+      - ${HOME}/.config/jira-sync/credentials:/home/devuser/.config/jira-sync/credentials:ro
 
-    network_mode: bridge
+    dns:
+      - 127.0.0.11
+      - 192.168.65.7
+
+    networks:
+      - claude-dev-net
 
     cap_drop:
       - ALL
@@ -36,3 +43,31 @@ services:
       - no-new-privileges:true
 
     working_dir: /workspace
+
+  terraform-mcp:
+    image: hashicorp/terraform-mcp-server:latest
+    container_name: terraform-mcp
+    restart: unless-stopped
+    environment:
+      TRANSPORT_MODE: streamable-http
+      TRANSPORT_HOST: 0.0.0.0
+      TRANSPORT_PORT: "8080"
+    networks:
+      - claude-dev-net
+
+networks:
+  claude-dev-net:
+    driver: bridge
+    driver_opts:
+      # Fixed bridge name so host iptables rules survive network recreation.
+      # Without this, Docker assigns a random name like br-a1b2c3d4e5f6 on each
+      # `docker compose up`, making persistent iptables rules fragile.
+      com.docker.network.bridge.name: br-claude-dev
+    ipam:
+      config:
+        # Fixed subnet so host iptables rules can target a stable source CIDR.
+        # cap_drop: ALL (above) already drops NET_ADMIN and NET_RAW, so the
+        # container cannot modify its own routing table or add iptables rules.
+        # Blocking VPN/RFC-1918 destinations requires host-level rules — see
+        # "make restrict-network" and the Network isolation section in README.md.
+        - subnet: 172.30.0.0/24
