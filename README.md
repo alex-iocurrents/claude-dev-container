@@ -24,6 +24,10 @@ Uses your existing claude.ai subscription for billing. No API key required.
    make run
    ```
 
+For the security image (legacy Python 3.7 toolchain + SBOM tooling — see
+[Security image](#security-image)), use `make run-security-build` instead of
+`make build` + `make run`.
+
 3. On first run, Claude Code will ask you to authenticate via browser. Follow
    the URL it prints. Auth is saved to `~/.claude` and `~/.claude.json` on your
    host and reused on subsequent sessions — you won't be asked again unless you
@@ -86,6 +90,33 @@ In addition to the base Node.js environment, the image includes:
 |------|--------|
 | `aws` (AWS CLI) | No AWS credentials are mounted into the container |
 | `gh` (GitHub CLI) | No GitHub credentials are mounted; GitHub automation is handled via GitHub Actions |
+
+## Security image
+
+`Dockerfile.security` builds `claude-dev:security`, `FROM claude-dev:latest`
+(the base image above). It adds tools that are needed occasionally rather than
+for day-to-day development, so they're kept out of the base image everyone
+rebuilds:
+
+| Tool | Purpose |
+|------|---------|
+| `python3.7` (via `python3.7`) | Compiled from source (Debian 12 doesn't package it); generates `Pipfile.lock` for legacy repos pinned to 3.7, e.g. `ioc-web-v1` |
+| `syft` | SBOM generation (pinned to `v1.46.0`) |
+
+Build and run it with:
+
+```sh
+make run-security-build
+```
+
+This builds the base image first if needed, then the security image on top of
+it, then runs it with the same network isolation as `make run`. Docker's layer
+cache means rebuilds after the first one are fast unless `Dockerfile.security`
+itself changes.
+
+As more security tooling gets added (SAST, vulnerability scanners, etc.), add
+it to `Dockerfile.security`, not the base `Dockerfile` — that's what keeps
+`make build` / `make run` fast for everyone else.
 
 ## Network isolation
 
@@ -159,7 +190,8 @@ docker run --privileged --pid=host --net=host --rm alpine \
 ## Rebuilding after Dockerfile changes
 
 ```sh
-make build
+make build            # base image
+make build-security   # security image (rebuilds base first if needed)
 ```
 
 ## Known gap: secrets inside repo directories

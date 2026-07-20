@@ -12,8 +12,9 @@ RUN apt-get update && apt-get install -y \
     unzip \
     ripgrep \
     postgresql-client \
+    postgresql \
     && rm -rf /var/lib/apt/lists/* \
-    && pip3 install --break-system-packages csvkit ansible ruff \
+    && pip3 install --break-system-packages csvkit ansible ruff pytest 'litellm[proxy]' \
     && curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
 
 # Terraform — pinned to 1.9.8, compatible with ~> 1.6 and ~> 1.7 in iocurrents-services
@@ -38,6 +39,14 @@ RUN groupadd -g ${HOST_GID} devgroup 2>/dev/null || true \
 
 WORKDIR /workspace
 RUN chown ${HOST_UID}:${HOST_GID} /workspace
+
+# devuser is non-root, so the Debian postgresql package's own cluster (owned
+# by the postgres system user, managed via pg_ctlcluster/systemd) isn't
+# directly usable. Give devuser their own data directory so they can run
+# initdb/pg_ctl themselves without sudo, e.g.:
+#   /usr/lib/postgresql/*/bin/initdb -D ~/pgdata
+#   /usr/lib/postgresql/*/bin/pg_ctl -D ~/pgdata -l ~/pgdata/log start
+RUN mkdir -p /home/devuser/pgdata && chown ${HOST_UID}:${HOST_GID} /home/devuser/pgdata
 
 USER devuser
 

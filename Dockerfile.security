@@ -1,0 +1,45 @@
+# Adds legacy Python toolchain and SBOM/security tooling on top of the base
+# dev image. These are needed occasionally, not for day-to-day development,
+# so they live in their own image rather than slowing down every base rebuild.
+FROM claude-dev:latest
+
+USER root
+
+# Python 3.7 — not available via apt on Debian 12 (bookworm); compiled from source.
+# Needed to generate Pipfile.lock for legacy repos pinned to 3.7 (e.g. ioc-web-v1).
+# `make altinstall` keeps this as python3.7 without touching the system python3(.11).
+# No --enable-optimizations: this interpreter only generates lockfiles at build
+# time, so it's not worth the PGO+LTO build (adds ~10-20 min for no runtime benefit).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    zlib1g-dev \
+    libncurses5-dev \
+    libgdbm-dev \
+    libnss3-dev \
+    libssl-dev \
+    libreadline-dev \
+    libffi-dev \
+    libsqlite3-dev \
+    libbz2-dev \
+    liblzma-dev \
+    uuid-dev \
+    tk-dev \
+    && curl -sSL https://www.python.org/ftp/python/3.7.17/Python-3.7.17.tgz -o /tmp/python3.7.tgz \
+    && tar -xzf /tmp/python3.7.tgz -C /tmp \
+    && cd /tmp/Python-3.7.17 \
+    && ./configure \
+    && make -j$(nproc) \
+    && make altinstall \
+    && cd / \
+    && rm -rf /tmp/Python-3.7.17 /tmp/python3.7.tgz \
+    && apt-get purge -y build-essential zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev \
+       libssl-dev libreadline-dev libffi-dev libsqlite3-dev libbz2-dev liblzma-dev uuid-dev tk-dev \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
+# syft — SBOM generation (pinned to v1.46.0; see claude_context/references/ioc-web-v1-sbom/syft-install-record.md)
+RUN curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh -o /tmp/syft-install.sh \
+    && sh /tmp/syft-install.sh -b /usr/local/bin -d v1.46.0 \
+    && rm /tmp/syft-install.sh
+
+USER devuser

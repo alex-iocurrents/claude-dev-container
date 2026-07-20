@@ -24,6 +24,46 @@ services:
       - ${HOME}/.claude_dev_bash_history:/home/devuser/.bash_history:rw
       # Jira sync credentials (read-only; create ~/.config/jira-sync/credentials on host first)
       - ${HOME}/.config/jira-sync/credentials:/home/devuser/.config/jira-sync/credentials:ro
+      - ${HOME}/claude-dev-container/litellm-config.yaml:/home/devuser/litellm-config.yaml:ro
+
+    dns:
+      - 127.0.0.11
+      - 192.168.65.7
+
+    networks:
+      - claude-dev-net
+
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+
+    security_opt:
+      - no-new-privileges:true
+
+    working_dir: /workspace
+
+  dev-security:
+    build:
+      context: .
+      dockerfile: Dockerfile.security
+    image: claude-dev:security
+    container_name: claude-dev-security
+    stdin_open: true
+    tty: true
+
+    environment:
+      - TERM=${TERM}
+      - CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1
+
+    volumes:
+      - ${HOME}/git:/workspace:rw
+      - ${HOME}/.claude:/home/devuser/.claude:rw
+      - ${HOME}/.claude.json:/home/devuser/.claude.json:rw
+      - ${HOME}/.claude_dev_bash_history:/home/devuser/.bash_history:rw
+      - ${HOME}/.config/jira-sync/credentials:/home/devuser/.config/jira-sync/credentials:ro
 
     dns:
       - 127.0.0.11
